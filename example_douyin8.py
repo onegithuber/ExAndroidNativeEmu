@@ -2,13 +2,14 @@ import logging
 import posixpath
 import sys
 import os.path
+import random
 
 from unicorn import *
 from unicorn.arm_const import *
 
 from androidemu.emulator import Emulator
 import androidemu.utils.debug_utils
-from androidemu.vfs.file_system import VirtualFile
+from androidemu.vfs.virtual_file import VirtualFile
 from androidemu.utils import misc_utils
 from androidemu.java.helpers.native_method import native_method
 from androidemu.java.java_class_def import JavaClassDef
@@ -18,15 +19,24 @@ from androidemu.java.classes.string import String
 from androidemu.java.classes.list import List
 from androidemu.java.classes.array import Array
 from androidemu.java.constant_values import *
+from androidemu.utils.mem_monitor import MemoryMonitor
 
 
 class XGorgen(metaclass=JavaClassDef, jvm_name='com/ss/sys/ces/a'):
     def __init__(self):
         pass
 
+    @staticmethod
     @java_method_def(name='leviathan', signature='(I[B)[B', native=True)
-    def leviathan(self, mu):
+    def leviathan(mu):
         pass
+    #
+
+    @staticmethod
+    @java_method_def(name='meta', signature='(ILandroid/content/Context;Ljava/lang/Object;)Ljava/lang/Object;', native=True)
+    def meta(mu, optype, ctx, obj):
+        pass
+    #
 
     @staticmethod
     @java_method_def(name='Francies', signature='()V', native=False)
@@ -84,23 +94,8 @@ class XGorgen(metaclass=JavaClassDef, jvm_name='com/ss/sys/ces/a'):
         elif i1 == 133:
             return String('{}')
 
-        return JAVA_RET_NULL
-
-    def test(self):
-        pass
-
-
-class secuni_b(metaclass=JavaClassDef, jvm_name='com/ss/sys/secuni/b/c'):
-    def __init__(self):
-        pass
-
-    @java_method_def(name='n0', signature='(Landroid/content/Context;)[B', native=True)
-    def n0(self, mu):
-        pass
-
-    @java_method_def(name='n1', signature='(Landroid/content/Context;Ljava/lang/String;)I', native=True)
-    def n1(self, mu):
-        pass
+        return JAVA_NULL
+#
 
 
 class UserInfo(metaclass=JavaClassDef, jvm_name='com/ss/android/common/applog/UserInfo'):
@@ -140,48 +135,35 @@ class java_lang_Thread(metaclass=JavaClassDef, jvm_name='java/lang/Thread'):
         l = [java_lang_StackTraceElement(String("dalvik.system.VMStack")),
                 java_lang_StackTraceElement(String("java.lang.Thread")),
                 java_lang_StackTraceElement(String("com.ss.sys.ces.a")),
-                java_lang_StackTraceElement(String("com.yf.douyintool.MainActivity")),
-                java_lang_StackTraceElement(String("java.lang.reflect.Method")),
-                java_lang_StackTraceElement(String("java.lang.reflect.Method")),
+                java_lang_StackTraceElement(String("com.ss.sys.ces.gg.tt$1")),
+                java_lang_StackTraceElement(String("com.bytedance.frameworks.baselib.network.http.e.a")),
+                java_lang_StackTraceElement(String("com.bytedance.ttnet.a.a.onCallToAddSecurityFactor")),
                 java_lang_StackTraceElement(String("android.support.v7.app.AppCompatViewInflater$DeclaredOnClickListener")),
-                java_lang_StackTraceElement(String("android.view.View")),
-                java_lang_StackTraceElement(String("android.os.Handler")),
-                java_lang_StackTraceElement(String("android.os.Handler")),
-                java_lang_StackTraceElement(String("android.os.Looper")),
-                java_lang_StackTraceElement(String("android.app.ActivityThread")),
                 java_lang_StackTraceElement(String("java.lang.reflect.Method")),
-                java_lang_StackTraceElement(String("java.lang.reflect.Method")),
-                java_lang_StackTraceElement(String("com.android.internal.os.ZygoteInit$MethodAndArgsCaller")),
-                java_lang_StackTraceElement(String("com.android.internal.os.ZygoteInit")),
-                java_lang_StackTraceElement(String("dalvik.system.NativeStart"))
+                java_lang_StackTraceElement(String("com.ttnet.org.chromium.base.Reflect.on")),
+                java_lang_StackTraceElement(String("com.ttnet.org.chromium.base.Reflect.call")),
+                java_lang_StackTraceElement(String("org.chromium.c.a")),
+                java_lang_StackTraceElement(String("org.chromium.e.onCallToAddSecurityFactor")),
+                java_lang_StackTraceElement(String("com.ttnet.org.chromium.net.impl.CronetUrlRequestContext")),
+                java_lang_StackTraceElement(String("com.ttnet.org.chromium.net.impl.CronetUrlRequest")),
                 ]
         return List(l)
-            
-
-
-
-def hook_mem_read(uc, access, address, size, value, user_data):
-    pc = uc.reg_read(UC_ARM_REG_PC)
-
-    if (address == 3419067861):
-        data = uc.mem_read(address, size)
-        v = int.from_bytes(data, byteorder='little', signed=False)
-        print("read")
     #
+#
 
-
+def hook_mem_read(uc, access, address, size, value, user_data):  
+    mnt = user_data
+    pc = uc.reg_read(UC_ARM_REG_PC)
+    mnt.feed_read(pc, address, size)
 #
 
 def hook_mem_write(uc, access, address, size, value, user_data):
+    mnt = user_data
     pc = uc.reg_read(UC_ARM_REG_PC)
-    if (address == 3419067861):
-        print("write")
-    #
-
-
+    mnt.feed_write(pc, address, size)
 #
-g_cfd = ChainLogger(sys.stdout, "./ins-douyin.txt")
 
+g_cfd = ChainLogger(sys.stdout, "./ins-douyin.txt")
 
 # Add debugging.
 def hook_code(mu, address, size, user_data):
@@ -193,21 +175,12 @@ def hook_code(mu, address, size, user_data):
         #
         # androidemu.utils.debug_utils.dump_registers(mu, sys.stdout)
         # androidemu.utils.debug_utils.dump_code(emu, address, size, sys.stdout)
-        androidemu.utils.debug_utils.dump_code(emu, address, size, g_cfd)
+        androidemu.utils.debug_utils.dump_code(emu, address, size, sys.stdout)
     except Exception as e:
         logger.exception("exception in hook_code")
         sys.exit(-1)
     #
-
-
 #
-
-# Configure logging
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)7s %(name)34s | %(message)s"
-)
 
 logger = logging.getLogger(__name__)
 
@@ -215,22 +188,23 @@ logger = logging.getLogger(__name__)
 emulator = Emulator(
     vfs_root=posixpath.join(posixpath.dirname(__file__), "vfs")
 )
+mnt = MemoryMonitor(emulator)
 
-emulator.mu.hook_add(UC_HOOK_MEM_WRITE, hook_mem_write)
-emulator.mu.hook_add(UC_HOOK_MEM_READ, hook_mem_read)
 # Register Java class.
 # emulator.java_classloader.add_class(MainActivity)
 emulator.java_classloader.add_class(XGorgen)
-emulator.java_classloader.add_class(secuni_b)
 emulator.java_classloader.add_class(UserInfo)
 emulator.java_classloader.add_class(java_lang_System)
 emulator.java_classloader.add_class(java_lang_Thread)
 emulator.java_classloader.add_class(java_lang_StackTraceElement)
 
 # Load all libraries.
+libdvm = emulator.load_library("vfs/system/lib/libdvm.so")
+
+libcm = emulator.load_library("vfs/system/lib/libc.so")
+
+emulator.mu.hook_add(UC_HOOK_MEM_WRITE, hook_mem_write, mnt)
 lib_module = emulator.load_library("tests/bin/libcms8.so")
-# lib_module = emulator.load_library("../deobf/tests/bin/libcms2.so")
-# lib_module = emulator.load_library("../deobf/cms.so")
 
 # Show loaded modules.
 logger.info("Loaded modules:")
@@ -239,10 +213,6 @@ for module in emulator.modules:
     logger.info("=> 0x%08x - %s" % (module.base, module.filename))
 
 try:
-    # Run JNI_OnLoad.
-    #   JNI_OnLoad will call 'RegisterNatives'.
-    emulator.call_symbol(lib_module, 'JNI_OnLoad', emulator.java_vm.address_ptr, 0x00)
-
     # bypass douyin checks
 
     path = "vfs/system/bin/app_process32"
@@ -250,29 +220,43 @@ try:
     vf = VirtualFile("/system/bin/app_process32", misc_utils.my_open(path, os.O_RDONLY), path)
     emulator.memory.map(0xab006000, sz, UC_PROT_WRITE | UC_PROT_READ, vf, 0)
 
-    x = XGorgen()
+    # Run JNI_OnLoad.
+    #   JNI_OnLoad will call 'RegisterNatives'.
+    emulator.call_symbol(lib_module, 'JNI_OnLoad', emulator.java_vm.address_ptr, 0x00)
+
+
+    print("begin meta")
+    
+    XGorgen.meta(emulator, 101, 0, String("0"))
+    XGorgen.meta(emulator, 102, 0, String("1128"))
+    XGorgen.meta(emulator, 1020, 0, String(""))
+
+    XGorgen.meta(emulator, 103, 0, String("5179025446"))
+    XGorgen.meta(emulator, 104, 0, String("110943176729"))
+
+    XGorgen.meta(emulator, 105, 0, String("850"))
+    
+    XGorgen.meta(emulator, 106, 0, String("com.ss.android.ugc.aweme"))
+    
+    XGorgen.meta(emulator, 107, 0, String("/data/user/0/com.ss.android.ugc.aweme/files"))
+    XGorgen.meta(emulator, 108, 0, String("/data/app/com.ss.android.ugc.aweme-1.apk"))
+    XGorgen.meta(emulator, 109, 0, String("/storage/emulated/0"))
+    XGorgen.meta(emulator, 110, 0, String("/data"))
+    
     data = 'acde74a94e6b493a3399fac83c7c08b35D58B21D9582AF77647FC9902E36AE70f9c001e9334e6e94916682224fbe4e5f00000000000000000000000000000000'
     data = bytearray(bytes.fromhex(data))
+    n = 1562848170
     arr = Array("B", data)
     
-    #emulator.mu.hook_add(UC_HOOK_CODE, hook_code, emulator)
-
-    result = x.leviathan(emulator, 1562848170, arr)
-
+    emulator.mu.hook_add(UC_HOOK_MEM_READ, hook_mem_read, mnt)
+    print("before lev")
+    
+    result = XGorgen.leviathan(emulator, n, arr)
     print(''.join(['%02x' % b for b in result]))
 
-    # 037d560d0000903e34fb093f1d21e78f3bdf3fbebe00b124becc
-    # 036d2a7b000010f4d05395b7df8b0ec2b5ec085b938a473a6a51
-    # 036d2a7b000010f4d05395b7df8b0ec2b5ec085b938a473a6a51
-
-    # 0300000000002034d288fe8d6b95b778105cc36eade709d2b500
-    # 0300000000002034d288fe8d6b95b778105cc36eade709d2b500
-    # 0300000000002034d288fe8d6b95b778105cc36eade709d2b500
-    # Dump natives found.
-
-#  for method in MainActivity.jvm_methods.values():
-#      if method.native:
-#         logger.info("- [0x%08x] %s - %s" % (method.native_addr, method.name, method.signature))
+    with open("./mem-mnt-dy8.txt", "w") as f:
+        mnt.dump_read_no_write(f)
+    #
 except UcError as e:
     print("Exit at 0x%08X" % emulator.mu.reg_read(UC_ARM_REG_PC))
     emulator.memory.dump_maps(sys.stdout)

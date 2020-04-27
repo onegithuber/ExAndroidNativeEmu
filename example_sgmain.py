@@ -42,17 +42,17 @@ class HttpUtil(metaclass=JavaClassDef, jvm_name='com/taobao/wireless/security/ad
 
     @java_method_def(name='sendSyncHttpGetRequestBridge', signature='(Ljava/lang/String;)Ljava/lang/String;', native=False)
     def sendSyncHttpGetRequestBridge(self, mu, string):
-        return JAVA_RET_NULL
+        return JAVA_NULL
     #
 
     @java_method_def(name='sendSyncHttpPostRequestBridge', signature='(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;II)Ljava/lang/String;', native=False)
     def sendSyncHttpPostRequestBridge(self, mu, s1, s2, s3, i1, i2):
-        return JAVA_RET_NULL
+        return JAVA_NULL
     #
 
     @java_method_def(name='downloadFileBridge', signature='(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;', native=False)
     def downloadFileBridge(self, mu, s1, s2):
-        return JAVA_RET_NULL
+        return JAVA_NULL
     #
 #
 
@@ -228,12 +228,6 @@ class UserTrackMethodJniBridge(metaclass=JavaClassDef, jvm_name='com/alibaba/wir
     #
 #
 
-# Configure logging
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)7s %(name)34s | %(message)s"
-)
 
 logger = logging.getLogger(__name__)
 

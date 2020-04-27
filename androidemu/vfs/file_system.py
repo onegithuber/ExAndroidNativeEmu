@@ -1,16 +1,17 @@
 import logging
 import os
 import posixpath
-
-from androidemu.const.linux import *
-from androidemu import config
-from androidemu.config import WRITE_FSTAT_TIMES
-from androidemu.cpu.syscall_handlers import SyscallHandlers
-from androidemu.utils import memory_helpers
-from androidemu.vfs import file_helpers
-from androidemu import pcb
-import androidemu.utils.misc_utils
+import sys
+from ..const.linux import *
+from .. import config
+from ..config import WRITE_FSTAT_TIMES
+from ..cpu.syscall_handlers import SyscallHandlers
+from ..utils import memory_helpers,misc_utils
+from . import file_helpers
+from .. import pcb
 import platform
+import shutil
+
 g_isWin = platform.system() == "Windows"
 if not g_isWin:
     import fcntl
@@ -21,17 +22,24 @@ OVERRIDE_URANDOM = False
 OVERRIDE_URANDOM_BYTE = b"\x00"
 
 
-class VirtualFile:
-
-    def __init__(self, name, file_descriptor, name_in_system=None):
-        self.name = name
-        self.name_in_system = name_in_system
-        self.descriptor = file_descriptor
-    #
-#
-
 
 class VirtualFileSystem:
+
+    def translate_path(self, filename):
+        return misc_utils.vfs_path_to_system_path(self._root_path, filename)
+    #
+
+    def __clear_proc_dir(self):
+        proc = "/proc"
+        proc = self.translate_path(proc)
+        dirs = os.listdir(proc)
+        for d in dirs:
+            if (d.isdigit()):
+                fp = "%s/%s/"%(proc, d)
+                shutil.rmtree(fp)
+            #
+        #
+    #
 
     """
     :type syscall_handler SyscallHandlers
@@ -39,14 +47,9 @@ class VirtualFileSystem:
     def __init__(self, root_path, syscall_handler, memory_map):
         self._root_path = root_path
         self.__memory_map = memory_map
-
-        # TODO: Improve fd logic.
-        self._file_descriptor_counter = 3
-        self._virtual_files = dict()
-        self._virtual_files[0] = VirtualFile('stdin', 0)
-        self._virtual_files[1] = VirtualFile('stdout', 1)
-        self._virtual_files[2] = VirtualFile('stderr', 2)
-
+        self.__pcb = pcb.get_pcb()
+        self.__clear_proc_dir()
+        
         syscall_handler.set_handler(0x3, "read", 3, self._handle_read)
         syscall_handler.set_handler(0x4, "write", 3, self._handle_write)
         syscall_handler.set_handler(0x5, "open", 3, self._handle_open)
@@ -64,16 +67,46 @@ class VirtualFileSystem:
         syscall_handler.set_handler(0x142, "openat", 4, self._handle_openat)
         syscall_handler.set_handler(0x147, "fstatat64", 4, self._handle_fstatat64)
         syscall_handler.set_handler(0x14c, "readlinkat", 4, self.__readlinkat)
+        syscall_handler.set_handler(0x14e, "faccessat", 4, self._faccessat)
 
-    def translate_path(self, filename):
-        return androidemu.utils.misc_utils.vfs_path_to_system_path(self._root_path, filename)
     #
-    
-    def _store_fd(self, name, name_in_system, file_descriptor):
-        next_fd = self._file_descriptor_counter
-        self._file_descriptor_counter += 1
-        self._virtual_files[next_fd] = VirtualFile(name, file_descriptor, name_in_system=name_in_system)
-        return next_fd
+
+    def __create_fd_link(self, fd, target):
+        global g_isWin
+        if (g_isWin):
+            return
+        #
+        if (fd >= 0):
+            pid = self.__pcb.get_pid()
+            fdbase = "/proc/%d/fd/"%pid
+            fdbase = self.translate_path(fdbase)
+            if (not os.path.exists(fdbase)):
+                os.makedirs(fdbase)
+            #
+            p = "%s/%d"%(fdbase, fd)
+            if (os.path.exists(p)):
+                os.remove(p)
+            #
+            full_target = os.path.abspath(target)
+            os.symlink(full_target, p, False)
+        #
+    #
+
+    def __del_fd_link(self, fd):
+        global g_isWin
+        if (g_isWin):
+            return
+        #
+        if (fd >= 0):
+            pid = self.__pcb.get_pid()
+            fdbase = "/proc/%d/fd/"%pid
+            fdbase = self.translate_path(fdbase)
+            p = "%s/%d"%(fdbase, fd)
+            if (os.path.exists(p)):
+                os.remove(p)
+            #
+        #
+    #
 
     def _open_file(self, filename, mode):
         #define O_RDONLY 00000000
@@ -85,7 +118,8 @@ class VirtualFileSystem:
 
         if filename == '/dev/urandom':
             logger.info("File opened '%s'" % filename)
-            return self._store_fd('/dev/urandom', None, 'urandom')
+            #return self.__pcb.alloc_file_fd('/dev/urandom', None, 'urandom')
+            raise NotImplementedError
         #
 
         file_path = self.translate_path(filename)
@@ -115,23 +149,45 @@ class VirtualFileSystem:
                     f.write(content)
                 #
             #
+            cgroup_path = "/proc/self/cgroup"
+            if (filename2 == cgroup_path):
+                with open(file_path, "w") as f:
+                    #TODO put to config
+                    uid = config.global_config_get("uid")
+                    content = "2:cpu:/apps\n1:cpuacct:/uid/%d\n"%uid
+                    f.write(content)
+                #
+            #
+            
         #
-
+        virtual_file = ["/dev/log/main", "/dev/log/events", "/dev/log/radio", "/dev/log/system",  "/dev/input/event0"]
+        if (filename in virtual_file):
+            d = os.path.dirname(file_path)
+            if (not os.path.exists(d)):
+                os.makedirs(d)
+            #
+            with open(file_path, "w") as f:
+                pass
+            #
+        #
         if os.path.isfile(file_path):
-            logger.info("File opened '%s'" %filename)
             flags = os.O_RDWR
-            if hasattr(os, "O_BINARY"):
-                flags |= os.O_BINARY
             if (mode & 100):
-                flags | os.O_CREAT
+                flags |= os.O_CREAT
             #
             if (mode & 2000):
-                flags | os.O_APPEND
+                flags |= os.O_APPEND
             #
-            return self._store_fd(filename, file_path, androidemu.utils.misc_utils.my_open(file_path, flags))
+            fd = misc_utils.my_open(file_path, flags)
+            self.__pcb.add_fd(filename, file_path, fd)
+            logger.info("openat return fd %d"%fd)
+            self.__create_fd_link(fd, file_path)
+            return fd
         else:
             logger.warning("File does not exist '%s'" % filename)
             return -1
+        #
+    #
 
     def _handle_read(self, mu, fd, buf_addr, count):
         """
@@ -151,24 +207,13 @@ class VirtualFileSystem:
             return 0
             #raise NotImplementedError("Unsupported read operation for file descriptor %d." % fd)
         #
-        if fd not in self._virtual_files:
-            # TODO: 重构，写到socket fd里面的都是合法的
-            #raise NotImplementedError()
-            return 0
-        #
 
-        file = self._virtual_files[fd]
-
+        file = self.__pcb.get_fd_detail(fd)
         logger.info("Reading %d bytes from '%s'" % (count, file.name))
 
-        if file.descriptor == 'urandom':
-            if OVERRIDE_URANDOM:
-                buf = OVERRIDE_URANDOM_BYTE * count
-            else:
-                buf = os.urandom(count)
-        else:
-            buf = os.read(file.descriptor, count)
+        buf = os.read(fd, count)
 
+        logger.info("read return %r"%buf)
         result = len(buf)
         mu.mem_write(buf_addr, buf)
         return result
@@ -186,18 +231,12 @@ class VirtualFileSystem:
             return len(data)
         #
 
-        if fd not in self._virtual_files:
-            # TODO: 重构，写到socket fd里面的都是合法的
-            logging.info("write to fd %x data:%r"%(fd, data))
-            return count
-            #raise NotImplementedError()
-
-        file = self._virtual_files[fd]
         try:
-            r = os.write(file.descriptor, data)
+            r = os.write(fd, data)
         except OSError as e:
+            file = self.__pcb.get_fd_detail(fd)
             logger.warning("File write '%s' error %r skip" %(file.name, e))
-            return 0
+            return -1
         #
         return r
     #
@@ -222,21 +261,13 @@ class VirtualFileSystem:
 
         close() returns zero on success. On error, -1 is returned, and errno is set appropriately.
         """
-        if fd not in self._virtual_files:
-            return 0
-
-        file = self._virtual_files[fd]
-
-        if file.descriptor != 'urandom':
-            logger.info("File closed '%s'" % file.name)
-            try:
-                os.close(file.descriptor)
-            except OSError as e:
-                logger.warning("File closed '%s' error %r skip" %(file.name, e))
-                return -1
-            #
-        else:
-            logger.info("File closed '%s'" % '/dev/urandom')
+        try:
+            self.__pcb.remove_fd(fd)
+            os.close(fd)
+            self.__del_fd_link(fd)
+        except OSError as e:
+            logger.warning("fd %d close error."%fd)
+            return -1
         #
         return 0
     
@@ -248,12 +279,7 @@ class VirtualFileSystem:
     #
 
     def _handle_lseek(self, mu, fd, offset, whence):
-        if fd not in self._virtual_files:
-            raise RuntimeError("fd %d not opened"%(fd,))
-            #for debug
-        #
-        file = self._virtual_files[fd]
-        return os.lseek(file.descriptor, offset, whence)
+        return os.lseek(fd, offset, whence)
     #
 
     def _handle_access(self, mu, filename_ptr, flags):
@@ -273,17 +299,16 @@ class VirtualFileSystem:
     #
 
     def _handle_writev(self, mu, fd, vec, vlen):
-        if fd == 2:
-            for i in range(0, vlen):
-                addr = memory_helpers.read_ptr(mu, (i * 8) + vec)
-                size = memory_helpers.read_ptr(mu, (i * 8) + vec + 4)
-                data = bytes(mu.mem_read(addr, size)).decode(encoding='UTF-8')
+        n = 0
+        for i in range(0, vlen):
+            addr = memory_helpers.read_ptr(mu, (i * 8) + vec)
+            size = memory_helpers.read_ptr(mu, (i * 8) + vec + 4)
+            data = bytes(mu.mem_read(addr, size))
+            n += os.write(fd, data)
+            logger.info('Writev %r' % data)
+        #
+        return n
 
-                logger.error('Writev %s' % data)
-
-            return 0
-
-        raise NotImplementedError()
 
     def _handle_fstat64(self, mu, fd, buf_ptr):
         """
@@ -293,15 +318,9 @@ class VirtualFileSystem:
 
         fstat() is identical to stat(), except that the file to be stat-ed is specified by the file descriptor fd.
         """
-        if fd not in self._virtual_files:
-            return -1
-
-        file = self._virtual_files[fd]
-        logger.info("File stat64 '%s'" % file.name)
-
-        stat = file_helpers.stat64(file.name_in_system)
-        # stat = os.fstat(file.descriptor)
-        file_helpers.stat_to_memory(mu, buf_ptr, stat, WRITE_FSTAT_TIMES)
+        stats = os.fstat(fd)
+        uid = config.global_config_get("uid")
+        file_helpers.stat_to_memory2(mu, buf_ptr, stats, uid)
 
         return 0
     #
@@ -325,18 +344,53 @@ class VirtualFileSystem:
         global g_isWin
         if (g_isWin):
             return 0
-        if (fd in self._virtual_files):
-            if (F_GETFL == cmd):
-                return fcntl.fcntl(fd, cmd)
-            elif(F_SETFL == cmd):
-                return fcntl.fcntl(fd, cmd, arg1)
+        if (F_GETFL == cmd):
+            return fcntl.fcntl(fd, cmd)
+        elif(F_SETFL == cmd):
+            return fcntl.fcntl(fd, cmd, arg1)
         #
         raise NotImplementedError()
     #
 
-    def __statfs64(self, mu, path, sz, buf):
+    def __statfs64(self, mu, path_ptr, sz, buf):
         #TODO
-        return -1
+        
+        path = memory_helpers.read_utf8(mu, path_ptr)
+        logger.info("statfs64 path %s"%path)
+        path = self.translate_path(path)
+        if (not os.path.exists(path)):
+            return -1
+        #
+        statv = os.statvfs(path)
+        '''
+        f_type = {uint32_t} 61267
+        f_bsize = {uint32_t} 4096
+        f_blocks = {uint64_t} 3290543
+        f_bfree = {uint64_t} 2499155
+        f_bavail = {uint64_t} 2499155
+        f_files = {uint64_t} 838832
+        f_ffree = {uint64_t} 828427
+        f_fsid = {fsid_t} 
+            __val = {int [2]} 
+        f_namelen = {uint32_t} 255
+        f_frsize = {uint32_t} 4096
+        f_flags = {uint32_t} 1062
+        f_spare = {uint32_t [4]} 
+        '''
+        mu.mem_write(buf, int(0xef53).to_bytes(4, 'little'))
+        mu.mem_write(buf+4, int(statv.f_bsize).to_bytes(4, 'little'))
+        mu.mem_write(buf+8, int(statv.f_blocks).to_bytes(8, 'little'))
+        mu.mem_write(buf+16, int(statv.f_bfree).to_bytes(8, 'little'))
+        mu.mem_write(buf+24, int(statv.f_bavail).to_bytes(8, 'little'))
+        mu.mem_write(buf+32, int(statv.f_files).to_bytes(8, 'little'))
+        mu.mem_write(buf+40, int(statv.f_ffree).to_bytes(8, 'little'))
+        mu.mem_write(buf+48, int(statv.f_fsid).to_bytes(8, 'little'))
+        mu.mem_write(buf+56, int(statv.f_namemax).to_bytes(4, 'little'))
+        mu.mem_write(buf+60, int(statv.f_frsize).to_bytes(4, 'little'))
+        mu.mem_write(buf+64, int(statv.f_flag).to_bytes(4, 'little'))
+        mu.mem_write(buf+68, int(0).to_bytes(16, 'little'))
+        #raise NotImplementedError()
+        return 0
     #
 
     def _handle_openat(self, mu, dfd, filename_ptr, flags, mode):
@@ -359,6 +413,7 @@ class VirtualFileSystem:
             raise NotImplementedError("Directory file descriptor has not been implemented yet.")
 
         return self._open_file(filename, mode)
+    #
 
     def _handle_fstatat64(self, mu, dirfd, pathname_ptr, buf, flags):
         """
@@ -379,6 +434,7 @@ class VirtualFileSystem:
         """
         pathname = memory_helpers.read_utf8(mu, pathname_ptr)
 
+        logger.info("fstatat64 patename=[%s]"%pathname)
         if not pathname.startswith('/'):
             raise NotImplementedError("Directory file descriptor has not been implemented yet.")
 
@@ -396,11 +452,12 @@ class VirtualFileSystem:
             logger.warning('> File was not found.')
             return -1
 
-        logger.warning('> File was found.')
+        logger.info('> File was found.')
 
-        stat = file_helpers.stat64(path=pathname)
+        stat = os.stat(pathname)
         # stat = os.stat(path=file_path, dir_fd=None, follow_symlinks=False)
-        file_helpers.stat_to_memory(mu, buf, stat, WRITE_FSTAT_TIMES)
+        uid = config.global_config_get("uid")
+        file_helpers.stat_to_memory2(mu, buf, stat, uid)
 
         return 0
     #
@@ -408,7 +465,6 @@ class VirtualFileSystem:
     def __readlinkat(self, mu, dfd, path, buf, bufsz):
         path_utf8 = memory_helpers.read_utf8(mu, path)
         logging.info("%x %s %x %r"%(dfd, path_utf8, buf, bufsz))
-        print(self._virtual_files)
         
         pobj = pcb.get_pcb()
         pid = pobj.get_pid()
@@ -417,18 +473,15 @@ class VirtualFileSystem:
         if (path_std_utf.startswith(fd_base)):
             fd_str = os.path.basename(path_std_utf)
             fd = int(fd_str)
-            if (fd in self._virtual_files):
-                name = self._virtual_files[fd].name
-                n = len(name)
-                if (n <= bufsz):
-                    memory_helpers.write_utf8(mu, buf, name)
-                    return 0
-                #
-                else:
-                    raise RuntimeError("buffer overflow!!!")
-                #
+            detail = self.__pcb.get_fd_detail(fd)
+            name = detail.name
+            n = len(name)
+            if (n <= bufsz):
+                memory_helpers.write_utf8(mu, buf, name)
+                return 0
+            #
             else:
-                raise RuntimeError("fd %d not found in opened file..."%fd)
+                raise RuntimeError("buffer overflow!!!")
             #
         else:
             raise NotImplementedError()
@@ -436,4 +489,21 @@ class VirtualFileSystem:
         return -1
     #
     
+    def _faccessat(self, mu, dirfd, pathname_ptr, mode, flag):
+        filename = memory_helpers.read_utf8(mu, pathname_ptr)
+        logger.info("faccessat filename:[%s]"%filename)
+        if (not os.path.isabs(filename)):
+            raise NotImplementedError("faccessat with relative filename not support now.")
+        #
+        else:
+            name_in_host = self.translate_path(filename)
+            if (os.access(name_in_host, mode)):
+                return 0
+            else:
+                logger.info("faccessat filename:[%s] not exist"%filename)
+                return -1
+            #
+        #
+    #
+
 #

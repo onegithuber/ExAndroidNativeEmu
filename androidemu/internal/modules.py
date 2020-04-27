@@ -2,13 +2,13 @@ import logging
 
 from unicorn import UC_PROT_ALL
 
-from androidemu.internal import arm
-from androidemu.utils.misc_utils import get_segment_protection,page_end, page_start
-from androidemu.internal.module import Module
-from androidemu.utils import memory_helpers,misc_utils
-from androidemu.vfs.file_system import VirtualFile
-from androidemu import config
-from androidemu.internal import elf_reader
+from . import arm
+from ..utils.misc_utils import get_segment_protection,page_end, page_start
+from .module import Module
+from ..utils import memory_helpers,misc_utils
+from ..vfs.virtual_file import VirtualFile
+from .. import config
+from . import elf_reader
 import os
 
 logger = logging.getLogger(__name__)
@@ -259,7 +259,7 @@ class Modules:
                 #
             #
             if (init_offset != 0):
-                init_array.appen(load_base+init_offset)
+                init_array.append(load_base+init_offset)
             #
             for _ in range(int(init_array_size / 4)):
                 b = self.emu.mu.mem_read(load_base+init_array_offset, 4)

@@ -1,7 +1,7 @@
-from androidemu.java.java_class_def import JavaClassDef
-from androidemu.java.java_field_def import JavaFieldDef
-from androidemu.java.java_method_def import java_method_def,JavaMethodDef
-from androidemu.java.constant_values import *
+from ..java_class_def import JavaClassDef
+from ..java_field_def import JavaFieldDef
+from ..java_method_def import java_method_def,JavaMethodDef
+from ..constant_values import *
 
 
 class List(metaclass=JavaClassDef, jvm_name='java/util/List'):
@@ -25,7 +25,7 @@ class List(metaclass=JavaClassDef, jvm_name='java/util/List'):
     def get(self, emu, index):
         if (index < len(self.__pylist)):
             return self.__pylist[index]
-        return JAVA_RET_NULL
+        return JAVA_NULL
     #
 
 
